@@ -1,0 +1,17 @@
+[project]
+name = "training-password-manager"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "configparser>=7.2.0",
+    "flet[all]==0.28.3",
+    "nuitka>=2.8.9",
+    "passlib>=1.7.4",
+    "pycryptodome>=3.23.0",
+]
+
+[tool.setuptools]
+py-modules = ["main", "master_password_UI", "password_manager_core", "UI_password_manager"]
