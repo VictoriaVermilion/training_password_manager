@@ -5,6 +5,8 @@ import time
 import secrets
 import threading
 import configparser
+import csv
+import io
 
 
 async def main_ui(page: ft.Page, master_password: str):
@@ -45,13 +47,20 @@ async def main_ui(page: ft.Page, master_password: str):
     password_list_view = ft.ListView(expand=True, spacing=10, padding=10)
 
     def save_all_passwords_to_file():
-        """メモリ上のall_passwordsを暗号化してファイルにアトミックに保存する"""
+        """メモリ上のall_passwordsを暗号化してファイルにアトミックに保存する（CSV形式、totp_secret含む）"""
         try:
-            lines = [
-                f"{p['service_name']},{p['username']},{p['password']}"
-                for p in all_passwords
-            ]
-            content_string = "\n".join(lines)
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            for p in all_passwords:
+                writer.writerow(
+                    [
+                        p.get("service_name", ""),
+                        p.get("username", ""),
+                        p.get("password", ""),
+                        p.get("totp_secret", ""),
+                    ]
+                )
+            content_string = buf.getvalue()
             content_bytes = content_string.encode("utf-8")
             password_manager_core.encrypt_password_file(content_bytes, master_password)
             return True
@@ -117,6 +126,58 @@ async def main_ui(page: ft.Page, master_password: str):
                     )
                 )
                 password_list_view.controls.append(password_detector)
+
+                # TOTP 表示: シークレットが設定されていればコードを生成してコピーできる
+                totp_secret = p.get("totp_secret", "")
+
+                def make_copy_totp(secret):
+                    def _handler(e):
+                        try:
+                            code = password_manager_core.generate_totp_code(secret)
+                            page.set_clipboard(code)
+                            clear_clipboard_sync(code, 10)
+                        except Exception as ex:
+                            error_message_tab2.value = (
+                                f"TOTP の生成に失敗しました: {ex}"
+                            )
+                            page.update()
+
+                    return _handler
+
+                if totp_secret:
+                    # シークレットの妥当性を確認して表示を決める（無効なら例外を捕捉して無効表示）
+                    try:
+                        code = password_manager_core.generate_totp_code(totp_secret)
+                        totp_row = ft.Row(
+                            controls=[
+                                ft.Text("TOTP: ", weight=ft.FontWeight.BOLD),
+                                ft.ElevatedButton(
+                                    text="コードをコピー",
+                                    on_click=make_copy_totp(totp_secret),
+                                ),
+                            ],
+                            spacing=10,
+                        )
+                    except Exception:
+                        # 無効なシークレット
+                        totp_row = ft.Row(
+                            controls=[
+                                ft.Text("TOTP: ", weight=ft.FontWeight.BOLD),
+                                ft.Text("無効なシークレット", color=ft.Colors.GREY),
+                                ft.ElevatedButton(text="コードをコピー", disabled=True),
+                            ],
+                            spacing=10,
+                        )
+                else:
+                    totp_row = ft.Row(
+                        controls=[
+                            ft.Text("TOTP: 未設定", color=ft.Colors.GREY),
+                            ft.ElevatedButton(text="コードをコピー", disabled=True),
+                        ],
+                        spacing=10,
+                    )
+
+                password_list_view.controls.append(totp_row)
                 password_list_view.controls.append(ft.Divider())
         page.update()
 
@@ -169,7 +230,12 @@ async def main_ui(page: ft.Page, master_password: str):
             return
 
         all_passwords.append(
-            {"service_name": service_name, "username": username, "password": password}
+            {
+                "service_name": service_name,
+                "username": username,
+                "password": password,
+                "totp_secret": "",
+            }
         )
         if save_all_passwords_to_file():
             msg = "パスワードを保存しました。"
@@ -194,11 +260,18 @@ async def main_ui(page: ft.Page, master_password: str):
             can_reveal_password=True,
         )
 
+        totp_edit = ft.TextField(
+            value=item.get("totp_secret", ""),
+            label="TOTP シークレットキー (任意)",
+            width=400,
+        )
+
         def on_save_edit(save_e):
             all_passwords[idx] = {
                 "service_name": service_edit.value,
                 "username": username_edit.value,
                 "password": password_edit.value,
+                "totp_secret": totp_edit.value,
             }
             if save_all_passwords_to_file():
                 dlg.open = False
@@ -214,7 +287,8 @@ async def main_ui(page: ft.Page, master_password: str):
             modal=True,
             title=ft.Text("パスワードを編集"),
             content=ft.Column(
-                controls=[service_edit, username_edit, password_edit], tight=True
+                controls=[service_edit, username_edit, password_edit, totp_edit],
+                tight=True,
             ),
             actions=[
                 ft.TextButton("保存", on_click=on_save_edit),

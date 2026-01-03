@@ -8,6 +8,9 @@ from Crypto.Protocol.KDF import PBKDF2
 import time as time_module
 import configparser
 import shutil
+import pyotp
+import csv
+import io
 
 # ソルトファイルと鍵の定数
 SALT_FILEPATH = "password_file\\salt.txt"
@@ -147,7 +150,9 @@ def decrypt_password_file(master_password, filepath=None):
         return b""  # ファイルが存在しないか空なら空のバイト列を返す
 
     if not os.path.exists(SALT_FILEPATH):
-        raise FileNotFoundError("ソルトファイルが見つかりません。アプリケーションが正しく初期化されていません。")
+        raise FileNotFoundError(
+            "ソルトファイルが見つかりません。アプリケーションが正しく初期化されていません。"
+        )
 
     with open(SALT_FILEPATH, "rb") as f:
         salt = f.read()
@@ -170,14 +175,16 @@ def decrypt_password_file(master_password, filepath=None):
         plaintext = cipher.decrypt_and_verify(ciphertext, tag)
         return plaintext
     except (ValueError, KeyError) as e:
-        raise ValueError("パスワードファイルの復号化に失敗しました。マスターパスワードが間違っているか、ファイルが破損している可能性があります。")
+        raise ValueError(
+            "パスワードファイルの復号化に失敗しました。マスターパスワードが間違っているか、ファイルが破損している可能性があります。"
+        )
 
 
 # パスワードファイルを復号化して内容を取得する関数
 def get_decrypted_passwords(master_password, filepath=None):
     if filepath is None:
         filepath = get_password_file_path()
-    
+
     try:
         decrypted_bytes = decrypt_password_file(master_password, filepath)
     except ValueError as e:
@@ -194,17 +201,25 @@ def get_decrypted_passwords(master_password, filepath=None):
     except UnicodeDecodeError:
         raise ValueError("パスワードファイルのデータが破損しており、読み込めません。")
 
-    for line in decrypted_content.splitlines():
-        line = line.strip()
-        if not line:
+    # CSV としてパースして、オプションで 4 列目に totp_secret を扱う
+    reader = csv.reader(decrypted_content.splitlines())
+    for row in reader:
+        if not row or all([not cell.strip() for cell in row]):
             continue
-        parts = line.split(",", 2)
-        if len(parts) != 3:
-            print(f"警告: 保存ファイルの行が不正な形式です。スキップします: {line}")
+        if len(row) < 3:
+            print(f"警告: 保存ファイルの行が不正な形式です。スキップします: {row}")
             continue
-        service_name, username, password = parts
+        service_name = row[0]
+        username = row[1]
+        password = row[2]
+        totp_secret = row[3] if len(row) >= 4 else ""
         passwords.append(
-            {"service_name": service_name, "username": username, "password": password}
+            {
+                "service_name": service_name,
+                "username": username,
+                "password": password,
+                "totp_secret": totp_secret,
+            }
         )
     return passwords
 
@@ -286,3 +301,13 @@ def test_argon2_hash(test_password, m=102400, t=2, p=8):
             "execution_time": execution_time,
             "error": str(ex),
         }
+
+
+# TOTP シークレットキーに基づいてワンタイムパスワードを生成する関数
+def generate_totp_code(secret_key):
+    """
+    与えられたシークレットキーから TOTP ワンタイムパスワードを生成する。
+    デフォルトでは30秒ごとにコードが変わる。
+    """
+    totp = pyotp.TOTP(secret_key)
+    return totp.now()
